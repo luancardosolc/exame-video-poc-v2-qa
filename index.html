@@ -1,0 +1,1240 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <!-- viewport moderna: dvh evita bugs de Safari iOS com barra de endereços -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Video Story — Exame Plus POC v2</title>
+  <style>
+    /* =====================================================
+       RESET
+       ===================================================== */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #000;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      overflow: hidden;
+      touch-action: pan-y;
+    }
+
+    /* =====================================================
+       Z-INDEX MAP
+       10  APP LAYER     — container raiz, fake fullscreen
+       20  VIDEO LAYER   — iframe/player como background
+       30  OVERLAY LAYER — UI social por cima do vídeo
+       40  GESTURE LAYER — captura toques (pointer-events: none)
+       ===================================================== */
+
+    /* =====================================================
+       APP LAYER
+       ===================================================== */
+    #app {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw;
+      height: 100dvh;
+      background: #000;
+      overflow: hidden;
+      z-index: 10;
+    }
+
+    /* =====================================================
+       VIDEO LAYER
+       ===================================================== */
+    #video-layer {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 20;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    /* Dimensões calculadas pelo VideoCover.resize() em JS */
+    #video-wrapper {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+
+    /* Iframes e containers criados pela IFrame API ficam 100% do wrapper */
+    #video-wrapper iframe,
+    #video-wrapper > div {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      border: none;
+      pointer-events: none;
+    }
+
+    /* =====================================================
+       AUTOPLAY FALLBACK
+       ===================================================== */
+    #autoplay-fallback {
+      display: none;
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.82);
+      color: #fff;
+      padding: 20px 28px;
+      border-radius: 12px;
+      text-align: center;
+      z-index: 35;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    #autoplay-fallback .play-icon { font-size: 48px; display: block; margin-bottom: 8px; }
+
+    /* =====================================================
+       ERROR OVERLAY — payload inválido ou player com erro
+       ===================================================== */
+    #error-overlay {
+      display: none;
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.92);
+      z-index: 36;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px;
+      text-align: center;
+    }
+    .error-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.7; }
+    #error-title {
+      color: #fff;
+      font-size: 17px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    #error-message {
+      color: rgba(255,255,255,0.55);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    /* =====================================================
+       OVERLAY LAYER
+       ===================================================== */
+    #overlay-layer {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 30;
+      pointer-events: none;
+    }
+
+    .gradient-bottom {
+      position: absolute;
+      bottom: 0; left: 0;
+      width: 100%; height: 65%;
+      background: linear-gradient(
+        to top,
+        rgba(0,0,0,0.88) 0%,
+        rgba(0,0,0,0.4) 50%,
+        transparent 100%
+      );
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    .gradient-top {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 30%;
+      background: linear-gradient(
+        to bottom,
+        rgba(0,0,0,0.75) 0%,
+        transparent 100%
+      );
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    /* --- Header --- */
+    .overlay-header {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      padding: 12px 16px;
+      padding-top: calc(12px + env(safe-area-inset-top));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 31;
+      pointer-events: all;
+    }
+
+    .btn-close {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.5);
+      border: none;
+      color: #fff;
+      font-size: 18px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      flex-shrink: 0;
+      transition: transform 0.15s;
+    }
+    .btn-close:active { transform: scale(0.92); }
+
+    /* Badge AO VIVO com pulse */
+    .badge-live {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      background: #e11d48;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 4px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .badge-live.visible { display: flex; }
+    .badge-live .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #fff;
+      animation: pulse-dot 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.5; transform: scale(0.7); }
+    }
+
+    /* --- Sidebar (direita) --- */
+    .overlay-sidebar {
+      position: absolute;
+      right: 12px;
+      bottom: calc(120px + env(safe-area-inset-bottom));
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+      z-index: 31;
+      pointer-events: all;
+    }
+
+    .sidebar-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      color: #fff;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+    }
+    .sidebar-btn .icon {
+      width: 44px; height: 44px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.15);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      transition: transform 0.15s, background 0.15s;
+    }
+    .sidebar-btn:active .icon { transform: scale(0.88); background: rgba(255,255,255,0.28); }
+    .sidebar-btn .label { font-size: 11px; font-weight: 600; text-shadow: 0 1px 3px rgba(0,0,0,0.6); }
+
+    /* --- Controles do player --- */
+    .player-controls {
+      position: absolute;
+      bottom: calc(100px + env(safe-area-inset-bottom));
+      left: 16px;
+      display: flex;
+      gap: 10px;
+      z-index: 33;
+      pointer-events: all;
+    }
+
+    .ctrl-btn {
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #fff;
+      font-size: 18px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.15s, background 0.15s;
+    }
+    .ctrl-btn:active { transform: scale(0.9); }
+    .ctrl-btn.active { background: rgba(255,255,255,0.25); }
+
+    /* --- Footer --- */
+    .overlay-footer {
+      position: absolute;
+      bottom: 0; left: 0;
+      width: 100%;
+      padding: 16px;
+      padding-right: 70px; /* espaço para a sidebar */
+      padding-bottom: calc(16px + env(safe-area-inset-bottom));
+      z-index: 31;
+      pointer-events: all;
+    }
+
+    .video-eyebrow {
+      color: rgba(255,255,255,0.55);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+    }
+
+    .video-title {
+      color: #fff;
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+      line-height: 1.35;
+    }
+
+    .video-subtitle {
+      color: rgba(255,255,255,0.75);
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 6px;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    }
+
+    .video-description {
+      color: rgba(255,255,255,0.65);
+      font-size: 12px;
+      line-height: 1.55;
+      margin-bottom: 14px;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .btn-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 700;
+      padding: 12px 22px;
+      border-radius: 28px;
+      border: none;
+      cursor: pointer;
+      box-shadow: 0 4px 20px rgba(99,102,241,0.45);
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .btn-cta:active {
+      transform: scale(0.96);
+      box-shadow: 0 2px 10px rgba(99,102,241,0.3);
+    }
+
+    /* --- Reactions animados --- */
+    #reactions-container {
+      position: absolute;
+      bottom: 120px; right: 60px;
+      width: 60px;
+      pointer-events: none;
+      z-index: 32;
+      overflow: visible;
+    }
+    .reaction {
+      position: absolute;
+      bottom: 0;
+      font-size: 24px;
+      animation: float-up 2.5s ease-out forwards;
+      opacity: 0;
+      user-select: none;
+    }
+    @keyframes float-up {
+      0%   { opacity: 1; transform: translateY(0) scale(1); }
+      20%  { opacity: 1; transform: translateY(-20px) scale(1.2); }
+      100% { opacity: 0; transform: translateY(-120px) scale(0.8) rotate(15deg); }
+    }
+
+    /* =====================================================
+       GESTURE LAYER
+       ===================================================== */
+    #gesture-layer {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 40;
+      pointer-events: none;
+    }
+
+    /* =====================================================
+       TOAST
+       ===================================================== */
+    #toast {
+      position: fixed;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%) scale(0.8);
+      background: rgba(0,0,0,0.82);
+      color: #fff;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 14px;
+      z-index: 60;
+      opacity: 0;
+      transition: opacity 0.2s, transform 0.2s;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    #toast.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+
+    /* =====================================================
+       LANDSCAPE
+       ===================================================== */
+    @media (orientation: landscape) {
+      .overlay-sidebar {
+        right: calc(12px + env(safe-area-inset-right));
+        bottom: 60px;
+      }
+      .overlay-footer {
+        padding-left: calc(16px + env(safe-area-inset-left));
+        padding-right: calc(80px + env(safe-area-inset-right));
+        padding-bottom: calc(12px + env(safe-area-inset-bottom));
+      }
+    }
+
+    /* =====================================================
+       DESKTOP — frame mobile para testar no browser
+       ===================================================== */
+    @media (min-width: 600px) {
+      body {
+        background: #1a1a1a;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #app {
+        position: relative;
+        width: 390px;
+        height: 844px;
+        max-height: 100dvh;
+        border-radius: 44px;
+        overflow: hidden;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.8);
+      }
+    }
+
+    /* =====================================================
+       WEBVIEW — desfaz o frame de desktop ao rodar no app
+       ===================================================== */
+    body.in-webview { background: #000; display: block; }
+    body.in-webview #app {
+      position: fixed;
+      width: 100vw;
+      height: 100dvh;
+      border-radius: 0;
+      box-shadow: none;
+    }
+  </style>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- VIDEO LAYER -->
+  <div id="video-layer">
+    <div id="video-wrapper"><!-- player injetado pelo PlayerFactory --></div>
+  </div>
+
+  <!-- AUTOPLAY FALLBACK -->
+  <div id="autoplay-fallback" onclick="handleAutoplayFallback()">
+    <span class="play-icon">▶</span>
+    Toque para reproduzir
+  </div>
+
+  <!-- ERROR OVERLAY -->
+  <div id="error-overlay">
+    <div class="error-icon">⚠</div>
+    <p id="error-title">Não foi possível carregar</p>
+    <p id="error-message"></p>
+  </div>
+
+  <!-- OVERLAY LAYER -->
+  <div id="overlay-layer">
+    <div class="gradient-top"></div>
+    <div class="gradient-bottom"></div>
+
+    <!-- Header -->
+    <div class="overlay-header">
+      <button class="btn-close" onclick="handleClose()" aria-label="Fechar">✕</button>
+      <div class="badge-live" id="badge-live" aria-label="Transmissão ao vivo">
+        <span class="dot"></span>AO VIVO
+      </div>
+      <!-- spacer para alinhar badge ao centro -->
+      <div style="width:36px;flex-shrink:0"></div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="overlay-sidebar">
+      <button class="sidebar-btn" onclick="handleSidebarAction('like')" aria-label="Curtir">
+        <div class="icon">❤️</div>
+        <span class="label">Curtir</span>
+      </button>
+      <button class="sidebar-btn" onclick="handleSidebarAction('comment')" aria-label="Comentar">
+        <div class="icon">💬</div>
+        <span class="label">Comentar</span>
+      </button>
+      <button class="sidebar-btn" onclick="handleSidebarAction('share')" aria-label="Compartilhar">
+        <div class="icon">↗️</div>
+        <span class="label">Enviar</span>
+      </button>
+    </div>
+
+    <!-- Controles do player -->
+    <div class="player-controls">
+      <button class="ctrl-btn" id="btn-play"       onclick="togglePlay()"       aria-label="Play/Pause">⏸</button>
+      <button class="ctrl-btn" id="btn-mute"       onclick="toggleMute()"       aria-label="Mute/Unmute">🔇</button>
+      <button class="ctrl-btn" id="btn-fullscreen" onclick="handleFullscreen()" aria-label="Tela cheia">⛶</button>
+    </div>
+
+    <!-- Footer -->
+    <div class="overlay-footer">
+      <p class="video-eyebrow"    id="overlay-eyebrow"></p>
+      <p class="video-title"      id="overlay-title"></p>
+      <p class="video-subtitle"   id="overlay-subtitle"></p>
+      <p class="video-description" id="overlay-description"></p>
+      <button class="btn-cta" id="btn-cta" style="display:none"></button>
+    </div>
+
+    <!-- Reactions -->
+    <div id="reactions-container" aria-hidden="true"></div>
+  </div>
+
+  <!-- GESTURE LAYER -->
+  <div id="gesture-layer"></div>
+
+</div>
+
+<div id="toast" aria-live="polite"></div>
+
+<script>
+'use strict';
+
+/* =====================================================
+   Logger — console.log condicional por behavior.showDebug
+   Sempre loga erros, independente do flag.
+   ===================================================== */
+const Logger = (function () {
+  let _on = false;
+  return {
+    enable()       { _on = true; },
+    log(...a)      { if (_on) console.log('[poc-v2]', ...a); },
+    warn(...a)     { if (_on) console.warn('[poc-v2]', ...a); },
+    error(...a)    { console.error('[poc-v2]', ...a); },
+  };
+})();
+
+/* =====================================================
+   AppBridge — comunicação com React Native
+   ===================================================== */
+const AppBridge = (function () {
+  let _iframeHandler = null;
+
+  function send(type, payload) {
+    const msg = (payload !== undefined) ? { type, payload } : { type };
+    Logger.log('→ app', msg);
+    try {
+      if (window.ReactNativeWebView) {
+        window.ReactNativeWebView.postMessage(JSON.stringify(msg));
+      }
+    } catch (e) {
+      Logger.error('AppBridge.send failed', e);
+    }
+  }
+
+  // Recebe mensagens de iframes filhos (Vimeo player events).
+  // NÃO é usado para mensagens do app → web (app usa injectJavaScript).
+  function listenIframeMessages(handler) {
+    function listener(event) {
+      const isKnownPlayer =
+        event.origin.includes('vimeo.com') ||
+        event.origin.includes('youtube.com') ||
+        event.origin.includes('youtube-nocookie.com');
+      if (!isKnownPlayer) return;
+      try {
+        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        if (data && typeof data === 'object') handler(data, event.origin);
+      } catch { /* ignora mensagens não-JSON */ }
+    }
+    if (_iframeHandler) window.removeEventListener('message', _iframeHandler);
+    _iframeHandler = listener;
+    window.addEventListener('message', listener);
+  }
+
+  function stopListeningIframeMessages() {
+    if (_iframeHandler) {
+      window.removeEventListener('message', _iframeHandler);
+      _iframeHandler = null;
+    }
+  }
+
+  // Expõe o ponto de entrada para o app chamar via injectJavaScript:
+  // webViewRef.injectJavaScript('window.__pocV2LoadStory("base64url"); true;')
+  function registerEntrypoint(fn) {
+    window.__pocV2LoadStory = fn;
+    Logger.log('entrypoint __pocV2LoadStory registrado');
+  }
+
+  return {
+    isInWebView: () => Boolean(window.ReactNativeWebView),
+    send,
+    listenIframeMessages,
+    stopListeningIframeMessages,
+    registerEntrypoint,
+  };
+})();
+
+/* =====================================================
+   PayloadCodec — base64url encode/decode com suporte a Unicode
+   ===================================================== */
+const PayloadCodec = (function () {
+  function decode(encoded) {
+    try {
+      // base64url → base64 padrão
+      const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+      const padded  = base64 + '='.repeat((4 - base64.length % 4) % 4);
+      // base64 → bytes → UTF-8 string
+      const binary = atob(padded);
+      const bytes  = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return JSON.parse(new TextDecoder('utf-8').decode(bytes));
+    } catch (e) {
+      Logger.error('PayloadCodec.decode failed', e);
+      return null;
+    }
+  }
+
+  function encode(obj) {
+    try {
+      const bytes  = new TextEncoder().encode(JSON.stringify(obj));
+      let binary = '';
+      bytes.forEach(b => { binary += String.fromCharCode(b); });
+      return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    } catch (e) {
+      Logger.error('PayloadCodec.encode failed', e);
+      return '';
+    }
+  }
+
+  // Lê e decodifica ?payload= da URL atual. Retorna null se ausente ou inválido.
+  function fromQueryParam() {
+    try {
+      const raw = new URLSearchParams(window.location.search).get('payload');
+      return raw ? decode(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  return { decode, encode, fromQueryParam };
+})();
+
+/* =====================================================
+   PayloadValidator — valida e normaliza o payload
+   ===================================================== */
+const PayloadValidator = (function () {
+  const ALLOWED_PROVIDERS = new Set(['youtube', 'youtube_live', 'vimeo']);
+
+  function validate(raw) {
+    if (!raw || typeof raw !== 'object') {
+      throw new Error('Payload deve ser um objeto JSON válido.');
+    }
+    if (raw.version !== 1) {
+      throw new Error(`version inválida: ${raw.version}. Esperado: 1`);
+    }
+    if (!raw.story?.id) {
+      throw new Error('story.id é obrigatório.');
+    }
+    if (!raw.media?.provider || !ALLOWED_PROVIDERS.has(raw.media.provider)) {
+      throw new Error(
+        `media.provider inválido: "${raw.media?.provider}". Permitidos: ${[...ALLOWED_PROVIDERS].join(', ')}.`
+      );
+    }
+    if (!raw.media?.videoId || typeof raw.media.videoId !== 'string' || !raw.media.videoId.trim()) {
+      throw new Error('media.videoId é obrigatório e deve ser uma string não vazia.');
+    }
+
+    // Retorna payload normalizado com defaults aplicados
+    return {
+      version: 1,
+      story: {
+        id:          String(raw.story.id),
+        slug:        raw.story.slug        ?? '',
+        title:       raw.story.title       ?? '',
+        description: raw.story.description ?? '',
+        sourceLabel: raw.story.sourceLabel ?? '',
+        author:      raw.story.author      ?? '',
+        publishedAt: raw.story.publishedAt,
+        category:    raw.story.category,
+      },
+      media: {
+        provider:    raw.media.provider,
+        videoId:     raw.media.videoId.trim(),
+        sourceUrl:   raw.media.sourceUrl,
+        posterUrl:   raw.media.posterUrl,
+        aspectRatio: raw.media.aspectRatio ?? '16:9',
+        autoplay:    raw.media.autoplay    !== false,
+        muted:       raw.media.muted       !== false,
+        loop:        raw.media.loop        === true,
+      },
+      overlay: {
+        eyebrow:      raw.overlay?.eyebrow      ?? '',
+        title:        raw.overlay?.title        ?? raw.story?.title ?? '',
+        subtitle:     raw.overlay?.subtitle     ?? '',
+        description:  raw.overlay?.description  ?? '',
+        ctaLabel:     raw.overlay?.ctaLabel     ?? '',
+        ctaUrl:       raw.overlay?.ctaUrl       ?? '',
+        badge:        raw.overlay?.badge        ?? '',
+        showLiveBadge: raw.overlay?.showLiveBadge === true,
+      },
+      behavior: {
+        startFullscreen:      raw.behavior?.startFullscreen      === true,
+        allowFullscreenToggle: raw.behavior?.allowFullscreenToggle !== false,
+        showDebug:            raw.behavior?.showDebug            === true,
+      },
+      theme: {
+        mode:        raw.theme?.mode        ?? 'dark',
+        accentColor: raw.theme?.accentColor ?? '#6366f1',
+      },
+    };
+  }
+
+  return { validate };
+})();
+
+/* =====================================================
+   VideoCover — cálculo real de object-fit: cover para iframe
+   ===================================================== */
+const VideoCover = (function () {
+  let _ratio = 16 / 9;
+
+  function _parseRatio(str) {
+    if (!str || typeof str !== 'string') return 16 / 9;
+    const parts = str.split(':').map(Number);
+    if (parts.length === 2 && parts[0] > 0 && parts[1] > 0) return parts[0] / parts[1];
+    return 16 / 9;
+  }
+
+  function resize(aspectRatioStr) {
+    _ratio = _parseRatio(aspectRatioStr);
+    _apply();
+  }
+
+  function _apply() {
+    const wrapper = document.getElementById('video-wrapper');
+    if (!wrapper) return;
+
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const viewportRatio = vw / vh;
+
+    let w, h;
+    if (viewportRatio > _ratio) {
+      // Viewport mais largo que o vídeo → escalar pela largura
+      w = vw;
+      h = vw / _ratio;
+    } else {
+      // Viewport mais alto que o vídeo → escalar pela altura
+      h = vh;
+      w = vh * _ratio;
+    }
+
+    wrapper.style.width  = `${Math.ceil(w)}px`;
+    wrapper.style.height = `${Math.ceil(h)}px`;
+    Logger.log('cover resize', `${Math.ceil(w)}×${Math.ceil(h)} (ratio ${_ratio.toFixed(4)})`);
+  }
+
+  return { resize };
+})();
+
+/* =====================================================
+   PlayerFactory — cria e controla players YouTube e Vimeo
+   ===================================================== */
+const PlayerFactory = (function () {
+  let _ytPlayer   = null;
+  let _ytApiReady = false;
+  let _pendingYT  = null;
+
+  // Callback global obrigatório da YouTube IFrame API
+  window.onYouTubeIframeAPIReady = function () {
+    _ytApiReady = true;
+    Logger.log('YouTube IFrame API pronta');
+    if (_pendingYT) {
+      _doCreateYT(_pendingYT);
+      _pendingYT = null;
+    }
+  };
+
+  function _loadYouTubeAPI() {
+    if (window.YT) { window.onYouTubeIframeAPIReady(); return; }
+    const tag = document.createElement('script');
+    tag.src   = 'https://www.youtube.com/iframe_api';
+    document.head.appendChild(tag);
+  }
+
+  function _doCreateYT({ videoId, autoplay, muted, loop, callbacks }) {
+    const wrapper = document.getElementById('video-wrapper');
+    if (!wrapper) return;
+    wrapper.innerHTML = '<div id="yt-player-el"></div>';
+
+    const playerVars = {
+      autoplay:        autoplay ? 1 : 0,
+      mute:            muted    ? 1 : 0,   // OBRIGATÓRIO para autoplay no mobile
+      controls:        0,
+      rel:             0,
+      playsinline:     1,                  // CRÍTICO: evita fullscreen nativo no iOS
+      fs:              0,                  // CRÍTICO: sem botão fullscreen do YouTube
+      loop:            loop ? 1 : 0,
+      playlist:        loop ? videoId : undefined,
+      modestbranding:  1,
+      iv_load_policy:  3,
+      disablekb:       1,
+      enablejsapi:     1,
+    };
+    if (location.protocol !== 'file:') {
+      playerVars.origin = window.location.origin;
+    }
+
+    _ytPlayer = new YT.Player('yt-player-el', {
+      width: '100%', height: '100%',
+      videoId,
+      playerVars,
+      events: {
+        onReady(e) {
+          e.target.playVideo();
+          Logger.log('YouTube onReady');
+          callbacks.onReady?.();
+        },
+        onStateChange(e) {
+          if (e.data === YT.PlayerState.PLAYING) {
+            document.getElementById('autoplay-fallback').style.display = 'none';
+            callbacks.onPlay?.();
+          }
+          if (e.data === YT.PlayerState.PAUSED) {
+            callbacks.onPause?.();
+          }
+          // Detecta autoplay bloqueado (estado -1 persistente)
+          if (e.data === -1) {
+            setTimeout(() => {
+              if (_ytPlayer && typeof _ytPlayer.getPlayerState === 'function') {
+                if (_ytPlayer.getPlayerState() === -1) {
+                  document.getElementById('autoplay-fallback').style.display = 'block';
+                  Logger.warn('autoplay bloqueado pelo browser');
+                }
+              }
+            }, 3000);
+          }
+        },
+        onError(e) {
+          // Códigos: 2=param inválido, 5=erro HTML5, 100=não encontrado, 101/150=embedding desabilitado
+          const msg = `YouTube error code ${e.data}`;
+          Logger.error(msg);
+          callbacks.onError?.({ code: String(e.data), message: msg });
+        },
+      },
+    });
+
+    // Corrige estilo do container gerado pela IFrame API
+    setTimeout(() => {
+      const el = document.getElementById('yt-player-el');
+      if (!el) return;
+      el.style.cssText = 'width:100%;height:100%;';
+      const iframe = el.querySelector('iframe');
+      if (iframe) iframe.style.cssText = 'width:100%;height:100%;border:none;pointer-events:none;';
+    }, 300);
+  }
+
+  function _doCreateVimeo({ videoId, autoplay, muted, loop, callbacks }) {
+    const wrapper = document.getElementById('video-wrapper');
+    if (!wrapper) return;
+
+    const params = new URLSearchParams({
+      autoplay:    autoplay ? '1' : '0',
+      muted:       muted    ? '1' : '0',
+      loop:        loop     ? '1' : '0',
+      background:  '1',  // esconde controles nativos do Vimeo
+      playsinline: '1',
+      quality:     'auto',
+    });
+
+    wrapper.innerHTML = `<iframe
+      id="vimeo-iframe"
+      src="https://player.vimeo.com/video/${videoId}?${params}"
+      width="100%" height="100%"
+      frameborder="0"
+      allow="autoplay; fullscreen; picture-in-picture"
+      style="width:100%;height:100%;border:none;pointer-events:none;"
+    ></iframe>`;
+
+    // Escuta eventos do player Vimeo via postMessage
+    AppBridge.listenIframeMessages((data) => {
+      if (data.event === 'ready')  callbacks.onReady?.();
+      if (data.event === 'play')   callbacks.onPlay?.();
+      if (data.event === 'pause')  callbacks.onPause?.();
+    });
+  }
+
+  function create(media, callbacks) {
+    destroy(); // garante limpeza antes de criar novo player
+    Logger.log('create player', media.provider, media.videoId);
+
+    if (media.provider === 'youtube' || media.provider === 'youtube_live') {
+      _loadYouTubeAPI();
+      const args = {
+        videoId:   media.videoId,
+        autoplay:  media.autoplay,
+        muted:     media.muted,
+        loop:      media.loop,
+        callbacks,
+      };
+      if (!_ytApiReady) {
+        _pendingYT = args; // aguarda onYouTubeIframeAPIReady
+        Logger.log('YouTube API ainda carregando, player em fila');
+      } else {
+        _doCreateYT(args);
+      }
+    } else if (media.provider === 'vimeo') {
+      _doCreateVimeo({ ...media, callbacks });
+    }
+  }
+
+  function destroy() {
+    AppBridge.stopListeningIframeMessages();
+    if (_ytPlayer) {
+      try { _ytPlayer.destroy(); } catch { /* ignorado */ }
+      _ytPlayer = null;
+    }
+    _pendingYT = null;
+    const wrapper = document.getElementById('video-wrapper');
+    if (wrapper) wrapper.innerHTML = '';
+    Logger.log('player destruído');
+  }
+
+  function play()   { _ytPlayer?.playVideo?.()  || _vimeoMsg({ method: 'play' }); }
+  function pause()  { _ytPlayer?.pauseVideo?.() || _vimeoMsg({ method: 'pause' }); }
+  function mute()   { _ytPlayer?.mute?.()       || _vimeoMsg({ method: 'setVolume', value: 0 }); }
+  function unmute() {
+    if (_ytPlayer?.unMute) { _ytPlayer.unMute(); _ytPlayer.setVolume(80); }
+    else _vimeoMsg({ method: 'setVolume', value: 1 });
+  }
+
+  function _vimeoMsg(msg) {
+    const iframe = document.getElementById('vimeo-iframe');
+    iframe?.contentWindow?.postMessage(JSON.stringify(msg), 'https://player.vimeo.com');
+  }
+
+  return { create, destroy, play, pause, mute, unmute };
+})();
+
+/* =====================================================
+   OverlayRenderer — popula overlays com dados do payload
+   Usa textContent EXCLUSIVAMENTE — nunca innerHTML.
+   ===================================================== */
+const OverlayRenderer = (function () {
+  function _set(id, text) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const hasText = typeof text === 'string' && text.trim().length > 0;
+    el.textContent = hasText ? text : '';
+    el.style.display = hasText ? '' : 'none';
+  }
+
+  function render(overlay) {
+    _set('overlay-eyebrow',     overlay.eyebrow);
+    _set('overlay-title',       overlay.title);
+    _set('overlay-subtitle',    overlay.subtitle);
+    _set('overlay-description', overlay.description);
+
+    // Badge AO VIVO
+    document.getElementById('badge-live')
+      ?.classList.toggle('visible', overlay.showLiveBadge === true);
+
+    // Botão CTA
+    const ctaBtn = document.getElementById('btn-cta');
+    if (ctaBtn) {
+      const hasCta = Boolean(overlay.ctaLabel);
+      ctaBtn.style.display = hasCta ? '' : 'none';
+      if (hasCta) {
+        ctaBtn.textContent = overlay.ctaLabel;
+        ctaBtn.onclick = () => {
+          AppBridge.send('analytics', { event: 'cta_clicked', data: { url: overlay.ctaUrl } });
+        };
+      }
+    }
+  }
+
+  function showError(title, message) {
+    const overlay = document.getElementById('error-overlay');
+    if (!overlay) return;
+    const titleEl = document.getElementById('error-title');
+    const msgEl   = document.getElementById('error-message');
+    if (titleEl) titleEl.textContent = title;
+    if (msgEl)   msgEl.textContent   = message;
+    overlay.style.display = 'flex';
+  }
+
+  function hideError() {
+    const overlay = document.getElementById('error-overlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  return { render, showError, hideError };
+})();
+
+/* =====================================================
+   ESTADO GLOBAL
+   ===================================================== */
+const State = {
+  payload:      null,
+  isMuted:      true,
+  isPlaying:    true,
+  isFullscreen: false,
+};
+
+/* =====================================================
+   ENTRYPOINT — chamado pelo app via injectJavaScript:
+   window.__pocV2LoadStory("base64url_encoded_payload"); true;
+   ===================================================== */
+function __handlePayload(encoded) {
+  Logger.log('payload recebido (base64url)');
+
+  const raw = PayloadCodec.decode(encoded);
+  if (!raw) {
+    OverlayRenderer.showError(
+      'Payload inválido',
+      'Não foi possível decodificar os dados do vídeo. Verifique o encoding base64url.'
+    );
+    AppBridge.send('player:error', { code: 'DECODE_ERROR', message: 'Failed to decode base64url payload' });
+    return;
+  }
+
+  let payload;
+  try {
+    payload = PayloadValidator.validate(raw);
+  } catch (e) {
+    OverlayRenderer.showError('Payload inválido', e.message);
+    AppBridge.send('player:error', { code: 'INVALID_PAYLOAD', message: e.message });
+    return;
+  }
+
+  _start(payload);
+}
+
+function _start(payload) {
+  State.payload   = payload;
+  State.isMuted   = payload.media.muted;
+  State.isPlaying = payload.media.autoplay;
+
+  if (payload.behavior.showDebug) Logger.enable();
+  Logger.log('start', payload.story.slug, payload.media.provider, payload.media.videoId);
+
+  OverlayRenderer.hideError();
+  OverlayRenderer.render(payload.overlay);
+
+  // Botão fullscreen visível somente se permitido
+  const fsBtn = document.getElementById('btn-fullscreen');
+  if (fsBtn) fsBtn.style.display = payload.behavior.allowFullscreenToggle ? '' : 'none';
+
+  VideoCover.resize(payload.media.aspectRatio);
+
+  PlayerFactory.create(payload.media, {
+    onReady() {
+      Logger.log('player:ready');
+      AppBridge.send('player:ready');
+      _updateBtnPlay();
+      _updateBtnMute();
+    },
+    onPlay()  { State.isPlaying = true;  _updateBtnPlay(); AppBridge.send('player:play'); },
+    onPause() { State.isPlaying = false; _updateBtnPlay(); AppBridge.send('player:pause'); },
+    onError(e) {
+      Logger.error('player:error', e);
+      OverlayRenderer.showError('Erro no player', e.message ?? 'Falha ao reproduzir o vídeo.');
+      AppBridge.send('player:error', e);
+    },
+  });
+
+  if (payload.behavior.startFullscreen) handleFullscreen();
+
+  // Reactions apenas em live streams
+  if (payload.overlay.showLiveBadge) _startReactions();
+}
+
+/* =====================================================
+   CONTROLES DO PLAYER
+   ===================================================== */
+function togglePlay() {
+  if (State.isPlaying) { PlayerFactory.pause(); State.isPlaying = false; }
+  else                 { PlayerFactory.play();  State.isPlaying = true;  }
+  _updateBtnPlay();
+  Logger.log('togglePlay', State.isPlaying);
+}
+
+function toggleMute() {
+  if (State.isMuted) { PlayerFactory.unmute(); State.isMuted = false; }
+  else               { PlayerFactory.mute();   State.isMuted = true;  }
+  _updateBtnMute();
+  Logger.log('toggleMute', State.isMuted);
+}
+
+function handleFullscreen() {
+  State.isFullscreen = !State.isFullscreen;
+
+  const btn = document.getElementById('btn-fullscreen');
+  if (btn) btn.classList.toggle('active', State.isFullscreen);
+
+  AppBridge.send(State.isFullscreen ? 'fullscreen:enter' : 'fullscreen:exit');
+  Logger.log('fullscreen', State.isFullscreen);
+}
+
+function handleClose() {
+  // Para player antes de fechar para evitar vazamento de áudio
+  PlayerFactory.pause();
+  PlayerFactory.mute();
+
+  // Garante que o app desbloqueie a orientação
+  if (State.isFullscreen) {
+    State.isFullscreen = false;
+    AppBridge.send('fullscreen:exit');
+  }
+
+  AppBridge.send('close');
+  Logger.log('close');
+}
+
+function handleAutoplayFallback() {
+  document.getElementById('autoplay-fallback').style.display = 'none';
+  PlayerFactory.play();
+  State.isPlaying = true;
+  _updateBtnPlay();
+  Logger.log('autoplay fallback acionado manualmente');
+}
+
+function handleSidebarAction(action) {
+  const story = State.payload?.story;
+  AppBridge.send('analytics', {
+    event:  `story_${action}`,
+    data: { storyId: story?.id, storySlug: story?.slug },
+  });
+  Logger.log('sidebar action', action);
+}
+
+function _updateBtnPlay() {
+  const btn = document.getElementById('btn-play');
+  if (btn) btn.textContent = State.isPlaying ? '⏸' : '▶';
+}
+
+function _updateBtnMute() {
+  const btn = document.getElementById('btn-mute');
+  if (btn) btn.textContent = State.isMuted ? '🔇' : '🔊';
+}
+
+/* =====================================================
+   REACTIONS — apenas em live streams (showLiveBadge)
+   ===================================================== */
+const _EMOJIS = ['❤️','🔥','👏','😍','🎉','💜','⭐','🚀'];
+let _reactionTimer = null;
+
+function _startReactions() {
+  if (_reactionTimer) return;
+  _reactionTimer = setInterval(() => {
+    if (Math.random() > 0.45) _spawnReaction();
+  }, 900);
+}
+
+function _spawnReaction() {
+  const container = document.getElementById('reactions-container');
+  if (!container) return;
+  const el = document.createElement('div');
+  el.className   = 'reaction';
+  el.textContent = _EMOJIS[Math.floor(Math.random() * _EMOJIS.length)];
+  el.style.left  = `${Math.random() * 30}px`;
+  container.appendChild(el);
+  el.addEventListener('animationend', () => el.remove());
+}
+
+/* =====================================================
+   TOAST — feedback visual leve
+   ===================================================== */
+let _toastTimer;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), 1800);
+}
+
+/* =====================================================
+   RESIZE / ORIENTATION — recalcula cover ao girar
+   ===================================================== */
+window.addEventListener('resize', () => {
+  if (State.payload) VideoCover.resize(State.payload.media.aspectRatio);
+});
+window.addEventListener('orientationchange', () => {
+  if (State.payload) VideoCover.resize(State.payload.media.aspectRatio);
+});
+
+/* =====================================================
+   INIT — ponto de entrada ao carregar a página
+   ===================================================== */
+function init() {
+  // Adiciona classe que desfaz o frame desktop no app
+  if (AppBridge.isInWebView()) {
+    document.body.classList.add('in-webview');
+  }
+
+  // Registra __pocV2LoadStory antes de qualquer coisa
+  AppBridge.registerEntrypoint(__handlePayload);
+
+  // Tenta payload via query param (modo browser/standalone)
+  const paramEncoded = new URLSearchParams(window.location.search).get('payload');
+  if (paramEncoded) {
+    Logger.log('modo browser: payload via query param');
+    __handlePayload(paramEncoded);
+    // Envia ready mesmo assim — app pode querer saber que a página carregou
+    AppBridge.send('ready');
+    return;
+  }
+
+  // Modo WebView: sinaliza pronto e aguarda app injetar o payload
+  AppBridge.send('ready');
+  Logger.log('pronto, aguardando payload do app');
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+
+</body>
+</html>
