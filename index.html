@@ -323,6 +323,14 @@
         transform: translateY(0);
       }
 
+      .details-header {
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+        padding: 0 24px;
+        flex-shrink: 0;
+      }
+
       .details-scroll {
         flex: 1;
         overflow-y: auto;
@@ -330,7 +338,7 @@
         display: flex;
         flex-direction: column;
         gap: 24px;
-        padding: 0 24px;
+        padding: 24px 24px 0;
         padding-bottom: calc(24px + var(--sai-bottom));
       }
 
@@ -504,6 +512,45 @@
         line-height: 1.65;
         letter-spacing: 0.03em;
         flex-shrink: 0;
+      }
+
+      /* Estilos para conteúdo HTML rico renderizado dentro de .details-body */
+      .details-body img {
+        max-width: 100%;
+        height: auto;
+        border-radius: 4px;
+        display: block;
+        margin: 8px 0;
+      }
+      .details-body p {
+        margin: 0 0 12px;
+      }
+      .details-body p:last-child {
+        margin-bottom: 0;
+      }
+      .details-body h2,
+      .details-body h3 {
+        color: #fff;
+        font-weight: 600;
+        margin: 16px 0 8px;
+        line-height: 1.3;
+      }
+      .details-body h2 { font-size: 18px; }
+      .details-body h3 { font-size: 15px; }
+      .details-body ul,
+      .details-body ol {
+        padding-left: 20px;
+        margin: 0 0 12px;
+      }
+      .details-body li {
+        margin-bottom: 6px;
+      }
+      .details-body a {
+        color: #e01c23;
+      }
+      .details-body strong {
+        color: #ddd;
+        font-weight: 600;
       }
 
       .details-return-btn {
@@ -1050,8 +1097,8 @@
 
     <!-- DETAILS PANEL -->
     <div id="details-panel" aria-hidden="true">
-      <div class="details-scroll" id="details-scroll">
-        <!-- hero -->
+      <!-- cabeçalho fixo -->
+      <div class="details-header">
         <div class="details-hero" id="details-hero">
           <div class="details-hero-bg" id="details-hero-bg"></div>
           <div class="details-hero-backdrop"></div>
@@ -1075,11 +1122,11 @@
           <p class="details-title" id="details-title"></p>
           <div class="details-author-row" id="details-author-row" style="display:none"></div>
         </div>
+      </div>
 
-        <!-- corpo do slide ativo -->
+      <!-- apenas o corpo rola -->
+      <div class="details-scroll" id="details-scroll">
         <p class="details-body" id="details-body"></p>
-
-        <!-- botão voltar -->
         <button
           class="details-return-btn"
           onclick="handleCloseDetails()"
@@ -1338,6 +1385,7 @@
             ? rawDetails.slides.map((s) => ({
                 id: typeof s.id === "string" ? s.id : "",
                 plainText: typeof s.plainText === "string" ? s.plainText : "",
+                contentHtml: typeof s.contentHtml === "string" ? s.contentHtml : "",
               }))
             : [];
           const detailsAuthor =
@@ -2470,8 +2518,10 @@
         let _details = null;
         let _activeIndex = 0;
         let _autoTimer = null;
+        let _timerAttempts = 0;
 
         const AUTO_PROGRESS_MS = 5000;
+        const MAX_TIMER_RETRIES = 5; // máx ~25s extra antes de avançar forçado
 
         function _setVisible(id, show) {
           const el = document.getElementById(id);
@@ -2483,11 +2533,25 @@
           const slides = _details?.slides ?? [];
           const slide = slides[Math.min(index, slides.length - 1)];
 
+          // Reseta scroll ao topo ao trocar de slide
+          const scrollEl = document.getElementById("details-scroll");
+          if (scrollEl) scrollEl.scrollTop = 0;
+
           const bodyEl = document.getElementById("details-body");
           if (bodyEl) {
+            const html = slide?.contentHtml ?? "";
             const text = slide?.plainText ?? "";
-            bodyEl.textContent = text;
-            bodyEl.style.display = text.trim() ? "" : "none";
+            if (html.trim()) {
+              // Conteúdo HTML rico — fonte confiável (backend Exame)
+              bodyEl.innerHTML = html;
+              bodyEl.style.display = "";
+            } else if (text.trim()) {
+              bodyEl.textContent = text;
+              bodyEl.style.display = "";
+            } else {
+              bodyEl.innerHTML = "";
+              bodyEl.style.display = "none";
+            }
           }
 
           const pagEl = document.getElementById("details-pagination");
@@ -2609,18 +2673,38 @@
           if (_autoTimer) { clearTimeout(_autoTimer); _autoTimer = null; }
         }
 
-        function _startTimer() {
-          _clearTimer();
+        function _advanceOrClose() {
+          const slides = _details?.slides ?? [];
+          if (_activeIndex < slides.length - 1) {
+            _renderSlide(_activeIndex + 1);
+            _startTimer();
+          } else {
+            handleCloseDetails();
+          }
+        }
+
+        function _isAtScrollBottom() {
+          const el = document.getElementById("details-scroll");
+          if (!el) return true;
+          return el.scrollTop + el.clientHeight >= el.scrollHeight - 16;
+        }
+
+        function _scheduleCheck() {
           _autoTimer = setTimeout(function () {
             _autoTimer = null;
-            const slides = _details?.slides ?? [];
-            if (_activeIndex < slides.length - 1) {
-              _renderSlide(_activeIndex + 1);
-              _startTimer();
+            if (_isAtScrollBottom() || _timerAttempts >= MAX_TIMER_RETRIES) {
+              _advanceOrClose();
             } else {
-              handleCloseDetails();
+              _timerAttempts++;
+              _scheduleCheck();
             }
           }, AUTO_PROGRESS_MS);
+        }
+
+        function _startTimer() {
+          _clearTimer();
+          _timerAttempts = 0;
+          _scheduleCheck();
         }
 
         function isOpen() { return _details !== null; }
