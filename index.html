@@ -1097,8 +1097,8 @@
 
     <!-- DETAILS PANEL -->
     <div id="details-panel" aria-hidden="true">
-      <!-- cabeçalho fixo -->
-      <div class="details-header">
+      <!-- cabeçalho fixo — tap esquerdo/direito navega entre slides -->
+      <div class="details-header" onclick="handleDetailsHeaderTap(event)">
         <div class="details-hero" id="details-hero">
           <div class="details-hero-bg" id="details-hero-bg"></div>
           <div class="details-hero-backdrop"></div>
@@ -2375,6 +2375,14 @@
         return Boolean(
           interactive && !interactive.classList.contains("gesture-zone"),
         );
+      }
+
+      function handleDetailsHeaderTap(event) {
+        if (_isInteractiveTarget(event.target)) return;
+        const rect = event.currentTarget.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        if (x < rect.width / 3) DetailsPanel.previous();
+        else if (x > (2 * rect.width) / 3) DetailsPanel.next();
       }
 
       function handleStoryNavigationTap(event, direction) {
