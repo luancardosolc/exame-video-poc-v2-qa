@@ -902,17 +902,20 @@
        LANDSCAPE
        ===================================================== */
       @media (orientation: landscape) {
-        /* Header: em landscape o top safe area é mínimo; laterais precisam de proteção */
+        /* Header: padding-top sempre garante 12px abaixo do limite superior da safe area,
+           o que coloca o conteúdo ~12px abaixo da barra de progresso (3px + folga). */
         .overlay-header {
-          padding-top: max(12px, var(--sai-top));
+          padding-top: calc(var(--sai-top) + 12px);
           padding-right: calc(var(--space-inline) + var(--sai-right));
           padding-left: calc(var(--space-inline) + var(--sai-left));
         }
 
-        /* Progress bar: em landscape sai-top é ~0, então o offset de 16px empurraria a barra
-           para dentro da área dos botões do header. Ancoramos direto no limite da safe area. */
+        /* Progress bar: ancoramos na safe area topo e limitamos lateralmente
+           para não invadir as safe areas esquerda/direita (notch/home indicator). */
         #video-progress-track {
           top: var(--sai-top);
+          left: var(--sai-left);
+          width: calc(100% - var(--sai-left) - var(--sai-right));
         }
 
         /* Sidebar: adiciona safe area lateral direita em landscape */
