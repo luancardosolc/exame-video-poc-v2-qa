@@ -318,6 +318,11 @@
         overflow: hidden;
         display: flex;
         flex-direction: column;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      .details-pag-bar.paused::after {
+        animation-play-state: paused;
       }
       #details-panel.open {
         transform: translateY(0);
@@ -2527,6 +2532,8 @@
         let _activeIndex = 0;
         let _autoTimer = null;
         let _timerAttempts = 0;
+        let _timerStarted = 0;
+        let _remainingTime = 0;
 
         const AUTO_PROGRESS_MS = 5000;
         const MAX_TIMER_RETRIES = 5; // máx ~25s extra antes de avançar forçado
@@ -2697,7 +2704,10 @@
           return el.scrollTop + el.clientHeight >= el.scrollHeight - 16;
         }
 
-        function _scheduleCheck() {
+        function _scheduleCheck(delay) {
+          var ms = (delay !== undefined) ? delay : AUTO_PROGRESS_MS;
+          _remainingTime = ms;
+          _timerStarted = Date.now();
           _autoTimer = setTimeout(function () {
             _autoTimer = null;
             if (_isAtScrollBottom() || _timerAttempts >= MAX_TIMER_RETRIES) {
@@ -2706,13 +2716,34 @@
               _timerAttempts++;
               _scheduleCheck();
             }
-          }, AUTO_PROGRESS_MS);
+          }, ms);
         }
 
         function _startTimer() {
           _clearTimer();
           _timerAttempts = 0;
           _scheduleCheck();
+        }
+
+        function pause() {
+          if (!_details) return;
+          if (_autoTimer) {
+            var elapsed = Date.now() - _timerStarted;
+            _remainingTime = Math.max(300, _remainingTime - elapsed);
+            clearTimeout(_autoTimer);
+            _autoTimer = null;
+          }
+          document.querySelectorAll(".details-pag-bar").forEach(function (bar) {
+            bar.classList.add("paused");
+          });
+        }
+
+        function resume() {
+          if (!_details) return;
+          document.querySelectorAll(".details-pag-bar").forEach(function (bar) {
+            bar.classList.remove("paused");
+          });
+          if (!_autoTimer) _scheduleCheck(_remainingTime);
         }
 
         function isOpen() { return _details !== null; }
@@ -2734,7 +2765,7 @@
           }
         }
 
-        return { open, close, isOpen, next, previous };
+        return { open, close, isOpen, next, previous, pause, resume };
       })();
 
       function handleOpenDetails() {
@@ -2868,27 +2899,51 @@
         return { init };
       })();
 
-      function setupDetailsScrollTap() {
+      function setupDetailsTouchBehavior() {
+        const panel = document.getElementById("details-panel");
         const scrollEl = document.getElementById("details-scroll");
-        if (!scrollEl) return;
+        if (!panel || !scrollEl) return;
 
-        var _startX = 0;
-        var _startY = 0;
+        var _startX = 0, _startY = 0;
         var _didScroll = false;
+        var _isHolding = false;
+        var _holdTimer = null;
+        const HOLD_MS = 200;
 
-        scrollEl.addEventListener("touchstart", function (e) {
+        function _cancelHold() {
+          if (_holdTimer) { clearTimeout(_holdTimer); _holdTimer = null; }
+          if (_isHolding) {
+            _isHolding = false;
+            DetailsPanel.resume();
+          }
+        }
+
+        // Detecta início do toque em qualquer parte do painel
+        panel.addEventListener("touchstart", function (e) {
+          if (!DetailsPanel.isOpen()) return;
           _startX = e.touches[0].clientX;
           _startY = e.touches[0].clientY;
           _didScroll = false;
+          _holdTimer = setTimeout(function () {
+            _holdTimer = null;
+            _isHolding = true;
+            DetailsPanel.pause();
+          }, HOLD_MS);
         }, { passive: true });
 
+        // Scroll cancela o hold timer (mas mantém pausado se já estava)
         scrollEl.addEventListener("scroll", function () {
           _didScroll = true;
+          if (_holdTimer) { clearTimeout(_holdTimer); _holdTimer = null; }
         }, { passive: true });
 
-        scrollEl.addEventListener("touchend", function (e) {
-          if (!DetailsPanel.isOpen()) return;
-          if (_didScroll) return;
+        // Fim do toque: resume se estava holding; caso contrário testa tap lateral no corpo
+        panel.addEventListener("touchend", function (e) {
+          var wasHolding = _isHolding;
+          _cancelHold();
+          if (wasHolding) return;
+          if (!DetailsPanel.isOpen() || _didScroll) return;
+          if (!scrollEl.contains(e.target)) return; // tap lateral só no corpo
           var touch = e.changedTouches[0];
           var dx = Math.abs(touch.clientX - _startX);
           var dy = Math.abs(touch.clientY - _startY);
@@ -2897,6 +2952,10 @@
           var width = scrollEl.getBoundingClientRect().width;
           if (touch.clientX < width / 3) DetailsPanel.previous();
           else if (touch.clientX > (2 * width) / 3) DetailsPanel.next();
+        }, { passive: true });
+
+        panel.addEventListener("touchcancel", function () {
+          _cancelHold();
         }, { passive: true });
       }
 
@@ -2907,7 +2966,7 @@
 
         AppBridge.registerEntrypoint(__handlePayload);
         setupStoryNavigationSwipe();
-        setupDetailsScrollTap();
+        setupDetailsTouchBehavior();
 
         const mode = new URLSearchParams(window.location.search).get("mode");
         if (mode === "knowledge-pill") {
