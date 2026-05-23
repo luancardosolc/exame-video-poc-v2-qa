@@ -909,6 +909,12 @@
           padding-left: calc(var(--space-inline) + var(--sai-left));
         }
 
+        /* Progress bar: em landscape sai-top é ~0, então o offset de 16px empurraria a barra
+           para dentro da área dos botões do header. Ancoramos direto no limite da safe area. */
+        #video-progress-track {
+          top: var(--sai-top);
+        }
+
         /* Sidebar: adiciona safe area lateral direita em landscape */
         .overlay-sidebar {
           right: calc(var(--space-control) + var(--sai-right));
