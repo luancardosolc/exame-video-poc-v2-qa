@@ -983,15 +983,20 @@
         display: none;
       }
 
-      body.knowledge-pill-mode #overlay-layer {
+      /* Desativa eventos em TODOS os filhos do overlay — pointer-events: none
+         no pai não impede filhos com pointer-events: all de capturar eventos */
+      body.knowledge-pill-mode #overlay-layer,
+      body.knowledge-pill-mode #overlay-layer * {
         pointer-events: none;
       }
 
+      /* Reativa eventos no wrapper e no iframe do player para o Vimeo nativo funcionar */
       body.knowledge-pill-mode #video-wrapper,
       body.knowledge-pill-mode #video-wrapper iframe,
       body.knowledge-pill-mode #video-wrapper video,
       body.knowledge-pill-mode #video-wrapper > div {
         pointer-events: auto;
+        touch-action: auto; /* permite gestos horizontais (scrub do Vimeo) */
       }
     </style>
   </head>
