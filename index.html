@@ -976,8 +976,22 @@
       body.knowledge-pill-mode .footer-rail,
       body.knowledge-pill-mode #gesture-layer,
       body.knowledge-pill-mode .story-pill,
-      body.knowledge-pill-mode .btn-close {
+      body.knowledge-pill-mode .btn-close,
+      body.knowledge-pill-mode #video-progress-track,
+      body.knowledge-pill-mode .player-controls,
+      body.knowledge-pill-mode .gradient-bottom {
         display: none;
+      }
+
+      body.knowledge-pill-mode #overlay-layer {
+        pointer-events: none;
+      }
+
+      body.knowledge-pill-mode #video-wrapper,
+      body.knowledge-pill-mode #video-wrapper iframe,
+      body.knowledge-pill-mode #video-wrapper video,
+      body.knowledge-pill-mode #video-wrapper > div {
+        pointer-events: auto;
       }
     </style>
   </head>
@@ -1789,7 +1803,7 @@
             autoplay: autoplay ? "1" : "0",
             muted: muted ? "1" : "0",
             loop: loop ? "1" : "0",
-            controls: "0",
+            controls: isKnowledgePillMode() ? "1" : "0",
             title: "0",
             byline: "0",
             portrait: "0",
