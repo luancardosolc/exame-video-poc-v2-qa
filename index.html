@@ -1818,13 +1818,14 @@
           });
           if (vimeoHash) params.set("h", vimeoHash);
 
+          const iframePointerEvents = isKnowledgePillMode() ? "auto" : "none";
           wrapper.innerHTML = `<iframe
       id="vimeo-iframe"
       src="https://player.vimeo.com/video/${videoId}?${params}"
       width="100%" height="100%"
       frameborder="0"
       allow="autoplay; fullscreen; picture-in-picture"
-      style="width:100%;height:100%;border:none;pointer-events:none;"
+      style="width:100%;height:100%;border:none;pointer-events:${iframePointerEvents};"
     ></iframe>`;
 
           _watchReady("vimeo", callbacks);
