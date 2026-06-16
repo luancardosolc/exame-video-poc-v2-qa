@@ -1851,7 +1851,6 @@
           _watchReady("vimeo", callbacks);
           AppBridge.listenIframeMessages((data) => {
             if (data.event === "ready") {
-              Logger.log("vimeo:ready", { videoId, startAt });
               _markReady(callbacks);
               _vimeoMsg({ method: "addEventListener", value: "finish" });
               _vimeoMsg({ method: "addEventListener", value: "play" });
@@ -1862,24 +1861,10 @@
                 _vimeoMsg({ method: "setCurrentTime", value: Number(startAt) });
               }
             }
-            if (data.event === "play") {
-              Logger.log("vimeo:play", data.data);
-              callbacks.onPlay?.();
-            }
-            if (data.event === "pause") {
-              Logger.log("vimeo:pause", data.data);
-              callbacks.onPause?.();
-            }
-            if (data.event === "finish") {
-              Logger.log("vimeo:finish", data.data);
-              callbacks.onEnded?.();
-            }
+            if (data.event === "play") callbacks.onPlay?.();
+            if (data.event === "pause") callbacks.onPause?.();
+            if (data.event === "finish") callbacks.onEnded?.();
             if (data.event === "playProgress") {
-              Logger.log("vimeo:playProgress", {
-                seconds: data?.data?.seconds,
-                duration: data?.data?.duration,
-                percent: data?.data?.percent,
-              });
               callbacks.onProgress?.({
                 currentTime: Number(data?.data?.seconds ?? 0),
                 duration: Number(data?.data?.duration ?? 0) || undefined,
@@ -2183,15 +2168,6 @@
           status: type === "VIDEO_COMPLETED" ? "done" : "in_progress",
           ...(payload?.message ? { message: payload.message } : {}),
           ...(payload?.code ? { code: payload.code } : {}),
-        });
-        Logger.log("knowledge-pill:event", {
-          type,
-          slug,
-          rawCurrentTime: payload?.currentTime,
-          rawProgress: payload?.progress,
-          rawDuration: payload?.duration,
-          normalizedProgress: Math.max(0, Math.floor(Number(payload?.currentTime ?? payload?.progress ?? 0) || 0)),
-          normalizedDuration: Math.max(0, Math.floor(Number(payload?.duration ?? 0) || 0)),
         });
       }
 
@@ -2982,15 +2958,7 @@
           const slug = params.get("slug") || "knowledge-pill";
           const videoUrl = params.get("videoUrl") || "";
           const startAt = Number(params.get("startAt") || 0);
-          const debug = params.get("debug") === "1";
           const vimeo = parseVimeoUrl(videoUrl);
-          Logger.log("knowledge-pill:createPayload", {
-            slug,
-            videoUrl,
-            startAt,
-            debug,
-            parsedVimeo: vimeo,
-          });
 
           return {
             version: 1,
@@ -3016,7 +2984,6 @@
             behavior: {
               allowFullscreenToggle: false,
               knowledgePillMode: true,
-              showDebug: debug,
             },
           };
         }
@@ -3125,17 +3092,16 @@
         setupMainHoldPause();
         setupDetailsTouchBehavior();
 
-        const searchParams = new URLSearchParams(window.location.search);
-        if (searchParams.get("debug") === "1") Logger.enable();
-
-        const mode = searchParams.get("mode");
+        const mode = new URLSearchParams(window.location.search).get("mode");
         if (mode === "knowledge-pill") {
           Logger.log("modo knowledge-pill via query param");
           KnowledgePillMode.init();
           return;
         }
 
-        const paramEncoded = searchParams.get("payload");
+        const paramEncoded = new URLSearchParams(window.location.search).get(
+          "payload",
+        );
         if (paramEncoded) {
           Logger.log("modo browser: payload via query param");
           __handlePayload(paramEncoded);
