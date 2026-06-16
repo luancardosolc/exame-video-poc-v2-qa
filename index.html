@@ -9,6 +9,15 @@
     />
     <link rel="icon" href="data:," />
     <title>Video Story — Exame Plus POC v2</title>
+    <script
+      src="https://js.sentry-cdn.com/c14c30ea65fa8159dba4fe4f08cf9c09.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <script>
+      Sentry.onLoad(function () {
+        Sentry.init({ tracesSampleRate: 0, environment: 'production' });
+      });
+    </script>
     <style>
       /* =====================================================
        RESET
@@ -321,7 +330,7 @@
         user-select: none;
         -webkit-user-select: none;
       }
-      .details-pag-bar.paused::after {
+      .details-pag-bar.active.paused::after {
         animation-play-state: paused;
       }
       #details-panel.open {
@@ -1188,6 +1197,10 @@
           },
           error(...a) {
             console.error("[poc-v2]", ...a);
+            try {
+              const err = a[0] instanceof Error ? a[0] : new Error(String(a[0] ?? 'unknown'));
+              window.Sentry?.captureException(err, a.length > 1 ? { extra: { args: a.slice(1) } } : undefined);
+            } catch { /* nunca quebrar o app por falha de observabilidade */ }
           },
         };
       })();
@@ -1268,6 +1281,13 @@
        Atualiza as CSS custom properties --sai-* no :root.
        Fallback: se não injetado, as vars já têm env() como default.
        ===================================================== */
+      window.__pocSetUser = function (user) {
+        if (!user || !user.id) return;
+        try {
+          window.Sentry?.setUser({ id: user.id, email: user.email || undefined });
+        } catch { /* nunca quebrar o app por falha de observabilidade */ }
+      };
+
       window.__pocSetSafeArea = function (safeArea) {
         if (!safeArea) return;
 
@@ -1831,6 +1851,7 @@
           _watchReady("vimeo", callbacks);
           AppBridge.listenIframeMessages((data) => {
             if (data.event === "ready") {
+              Logger.log("vimeo:ready", { videoId, startAt });
               _markReady(callbacks);
               _vimeoMsg({ method: "addEventListener", value: "finish" });
               _vimeoMsg({ method: "addEventListener", value: "play" });
@@ -1841,10 +1862,24 @@
                 _vimeoMsg({ method: "setCurrentTime", value: Number(startAt) });
               }
             }
-            if (data.event === "play") callbacks.onPlay?.();
-            if (data.event === "pause") callbacks.onPause?.();
-            if (data.event === "finish") callbacks.onEnded?.();
+            if (data.event === "play") {
+              Logger.log("vimeo:play", data.data);
+              callbacks.onPlay?.();
+            }
+            if (data.event === "pause") {
+              Logger.log("vimeo:pause", data.data);
+              callbacks.onPause?.();
+            }
+            if (data.event === "finish") {
+              Logger.log("vimeo:finish", data.data);
+              callbacks.onEnded?.();
+            }
             if (data.event === "playProgress") {
+              Logger.log("vimeo:playProgress", {
+                seconds: data?.data?.seconds,
+                duration: data?.data?.duration,
+                percent: data?.data?.percent,
+              });
               callbacks.onProgress?.({
                 currentTime: Number(data?.data?.seconds ?? 0),
                 duration: Number(data?.data?.duration ?? 0) || undefined,
@@ -2148,6 +2183,15 @@
           status: type === "VIDEO_COMPLETED" ? "done" : "in_progress",
           ...(payload?.message ? { message: payload.message } : {}),
           ...(payload?.code ? { code: payload.code } : {}),
+        });
+        Logger.log("knowledge-pill:event", {
+          type,
+          slug,
+          rawCurrentTime: payload?.currentTime,
+          rawProgress: payload?.progress,
+          rawDuration: payload?.duration,
+          normalizedProgress: Math.max(0, Math.floor(Number(payload?.currentTime ?? payload?.progress ?? 0) || 0)),
+          normalizedDuration: Math.max(0, Math.floor(Number(payload?.duration ?? 0) || 0)),
         });
       }
 
@@ -2915,21 +2959,22 @@
           }
 
           const parts = url.pathname.split("/").filter(Boolean);
-          const videoId =
-            host === "player.vimeo.com" && parts[0] === "video"
-              ? parts[1]
-              : parts[0];
-          const pathHash =
-            host === "player.vimeo.com" && parts[0] === "video"
-              ? parts[2]
-              : parts[1];
+          const isPlayerUrl = host === "player.vimeo.com" && parts[0] === "video";
+          const isManageUrl =
+            host === "vimeo.com" && parts[0] === "manage" && parts[1] === "videos";
+          const videoId = isPlayerUrl ? parts[1] : isManageUrl ? parts[2] : parts[0];
+          const pathHash = isPlayerUrl ? parts[2] : isManageUrl ? parts[3] : parts[1];
           const vimeoHash = url.searchParams.get("h") || pathHash || "";
 
           if (!videoId || !/^\d+$/.test(videoId)) {
             throw new Error("ID do Vimeo não encontrado na videoUrl.");
           }
 
-          return { videoId, vimeoHash };
+          return {
+            videoId,
+            vimeoHash,
+            sourceUrl: `https://vimeo.com/${videoId}${vimeoHash ? `/${vimeoHash}` : ""}`,
+          };
         }
 
         function createPayload() {
@@ -2937,7 +2982,15 @@
           const slug = params.get("slug") || "knowledge-pill";
           const videoUrl = params.get("videoUrl") || "";
           const startAt = Number(params.get("startAt") || 0);
+          const debug = params.get("debug") === "1";
           const vimeo = parseVimeoUrl(videoUrl);
+          Logger.log("knowledge-pill:createPayload", {
+            slug,
+            videoUrl,
+            startAt,
+            debug,
+            parsedVimeo: vimeo,
+          });
 
           return {
             version: 1,
@@ -2949,7 +3002,7 @@
             media: {
               provider: "vimeo",
               videoId: vimeo.videoId,
-              sourceUrl: videoUrl,
+              sourceUrl: vimeo.sourceUrl,
               vimeoHash: vimeo.vimeoHash,
               startAt: Number.isFinite(startAt) && startAt > 0 ? Math.floor(startAt) : 0,
               aspectRatio: "16:9",
@@ -2963,6 +3016,7 @@
             behavior: {
               allowFullscreenToggle: false,
               knowledgePillMode: true,
+              showDebug: debug,
             },
           };
         }
@@ -3000,6 +3054,7 @@
         var _isHolding = false;
         var _holdTimer = null;
         const HOLD_MS = 200;
+        const MOVE_THRESHOLD = 10;
 
         function _cancelHold() {
           if (_holdTimer) { clearTimeout(_holdTimer); _holdTimer = null; }
@@ -3009,7 +3064,6 @@
           }
         }
 
-        // Detecta início do toque em qualquer parte do painel
         panel.addEventListener("touchstart", function (e) {
           if (!DetailsPanel.isOpen()) return;
           _startX = e.touches[0].clientX;
@@ -3022,19 +3076,30 @@
           }, HOLD_MS);
         }, { passive: true });
 
-        // Scroll cancela o hold timer (mas mantém pausado se já estava)
+        // Cancela hold se o dedo se mover além do threshold (mais robusto que depender só de scroll)
+        panel.addEventListener("touchmove", function (e) {
+          if (!_holdTimer) return;
+          var dx = Math.abs(e.touches[0].clientX - _startX);
+          var dy = Math.abs(e.touches[0].clientY - _startY);
+          if (dx > MOVE_THRESHOLD || dy > MOVE_THRESHOLD) {
+            clearTimeout(_holdTimer);
+            _holdTimer = null;
+            _didScroll = true;
+          }
+        }, { passive: true });
+
+        // Scroll cancela o hold timer como salvaguarda secundária
         scrollEl.addEventListener("scroll", function () {
           _didScroll = true;
           if (_holdTimer) { clearTimeout(_holdTimer); _holdTimer = null; }
         }, { passive: true });
 
-        // Fim do toque: resume se estava holding; caso contrário testa tap lateral no corpo
         panel.addEventListener("touchend", function (e) {
           var wasHolding = _isHolding;
           _cancelHold();
           if (wasHolding) return;
           if (!DetailsPanel.isOpen() || _didScroll) return;
-          if (!scrollEl.contains(e.target)) return; // tap lateral só no corpo
+          if (!scrollEl.contains(e.target)) return;
           var touch = e.changedTouches[0];
           var dx = Math.abs(touch.clientX - _startX);
           var dy = Math.abs(touch.clientY - _startY);
@@ -3060,16 +3125,17 @@
         setupMainHoldPause();
         setupDetailsTouchBehavior();
 
-        const mode = new URLSearchParams(window.location.search).get("mode");
+        const searchParams = new URLSearchParams(window.location.search);
+        if (searchParams.get("debug") === "1") Logger.enable();
+
+        const mode = searchParams.get("mode");
         if (mode === "knowledge-pill") {
           Logger.log("modo knowledge-pill via query param");
           KnowledgePillMode.init();
           return;
         }
 
-        const paramEncoded = new URLSearchParams(window.location.search).get(
-          "payload",
-        );
+        const paramEncoded = searchParams.get("payload");
         if (paramEncoded) {
           Logger.log("modo browser: payload via query param");
           __handlePayload(paramEncoded);
